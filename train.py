@@ -474,7 +474,7 @@ def benchmark_task(args, writer=None, feat='node-label'):
     evaluate(test_dataset, model, args, 'Validation')
 
 
-def benchmark_task_val(args, writer=None, feat='node-label'):
+def benchmark_task_val(args, writer=None, feat='node-feat'):
     all_vals = []
     graphs = load_data.read_graphfile(args.datadir, args.bmname, max_nodes=args.max_nodes)
 
@@ -596,7 +596,8 @@ def arg_parse():
     parser.add_argument('--name-suffix', dest='name_suffix',
             help='suffix added to the output filename')
 
-    parser.set_defaults(datadir='data',
+    parser.set_defaults(bmname='ENZYMES',
+                        datadir='data',
                         logdir='log',
                         dataset='syn1v2',
                         max_nodes=1000,
@@ -610,12 +611,12 @@ def arg_parse():
                         test_ratio=0.1,
                         num_workers=1,
                         input_dim=10,
-                        hidden_dim=20,
-                        output_dim=20,
-                        num_classes=2,
+                        hidden_dim=30,
+                        output_dim=30,
+                        num_classes=6,
                         num_gc_layers=3,
                         dropout=0.0,
-                        method='base',
+                        method='soft-assign',
                         name_suffix='',
                         assign_ratio=0.1,
                         num_pool=1
@@ -632,8 +633,8 @@ def main():
         shutil.rmtree(path)
     writer = SummaryWriter(path)
     #writer = None
-
-    os.environ['CUDA_VISIBLE_DEVICES'] = prog_args.cuda
+    # os.environ['CUDA_VISIBLE_DEVICES'] = prog_args.cuda
+    os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
     print('CUDA', prog_args.cuda)
 
     if prog_args.bmname is not None:
