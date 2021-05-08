@@ -494,7 +494,7 @@ def benchmark_task_val(args, writer=None, feat='node-feat'):
         for G in graphs:
             featgen_const.gen_node_features(G)
 
-    for i in range(10):
+    for i in range(1):
         train_dataset, val_dataset, max_num_nodes, input_dim, assign_input_dim = \
                 cross_val.prepare_val_data(graphs, args, i, max_nodes=args.max_nodes)
         if args.method == 'soft-assign':
@@ -596,7 +596,7 @@ def arg_parse():
     parser.add_argument('--name-suffix', dest='name_suffix',
             help='suffix added to the output filename')
 
-    parser.set_defaults(bmname='ENZYMES',
+    parser.set_defaults(bmname='SEC',
                         datadir='data',
                         logdir='log',
                         dataset='syn1v2',
@@ -606,14 +606,14 @@ def arg_parse():
                         lr=0.001,
                         clip=2.0,
                         batch_size=20,
-                        num_epochs=1000,
+                        num_epochs=100,
                         train_ratio=0.8,
                         test_ratio=0.1,
                         num_workers=1,
                         input_dim=10,
                         hidden_dim=30,
                         output_dim=30,
-                        num_classes=6,
+                        num_classes=3,
                         num_gc_layers=3,
                         dropout=0.0,
                         method='soft-assign',
