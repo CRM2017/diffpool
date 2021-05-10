@@ -1,3 +1,4 @@
+from math import log
 import matplotlib
 import matplotlib.colors as colors
 import matplotlib.pyplot as plt
@@ -29,10 +30,22 @@ import util
 
 
 def evaluate(dataset, model, args, name='Validation', max_num_examples=None):
+
+    # calculate categorical cross entropy
+    def cross_entropy(actual, predicted):
+        sum_score = 0.0
+        for i in range(len(actual)):
+            for j in range(len(actual[i])):
+                sum_score += actual[i][j] * log(1e-15 + predicted[i][j])
+        mean_sum_score = 1.0 / len(actual) * sum_score
+        return -mean_sum_score
+
     model.eval()
 
     labels = []
     preds = []
+    avg_loss = 0.0
+    optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=0.001)
     for batch_idx, data in enumerate(dataset):
         adj = Variable(data['adj'].float(), requires_grad=False).cuda()
         h0 = Variable(data['feats'].float()).cuda()
@@ -43,18 +56,25 @@ def evaluate(dataset, model, args, name='Validation', max_num_examples=None):
         ypred = model(h0, adj, batch_num_nodes, assign_x=assign_input)
         _, indices = torch.max(ypred, 1)
         preds.append(indices.cpu().data.numpy())
-
+        label = Variable(data['label'].long()).cuda()
+        loss = model.loss(ypred, label)
+        loss.backward()
+        nn.utils.clip_grad_norm_(model.parameters(), args.clip)
+        optimizer.step()
+        avg_loss += loss
         if max_num_examples is not None:
             if (batch_idx+1)*args.batch_size > max_num_examples:
                 break
 
+    avg_loss /= batch_idx + 1
     labels = np.hstack(labels)
     preds = np.hstack(preds)
-    
+
     result = {'prec': metrics.precision_score(labels, preds, average='macro'),
               'recall': metrics.recall_score(labels, preds, average='macro'),
               'acc': metrics.accuracy_score(labels, preds),
-              'F1': metrics.f1_score(labels, preds, average="micro")}
+              'F1': metrics.f1_score(labels, preds, average="micro"),
+              'loss': avg_loss}
     print(name, " accuracy:", result['acc'])
     return result
 
@@ -191,6 +211,10 @@ def train(dataset, model, args, same_feat=True, val_dataset=None, test_dataset=N
     test_accs = []
     test_epochs = []
     val_accs = []
+    epochs = []
+    train_loss = []
+    test_loss = []
+    val_loss = []
     for epoch in range(args.num_epochs):
         total_time = 0
         avg_loss = 0.0
@@ -231,18 +255,22 @@ def train(dataset, model, args, same_feat=True, val_dataset=None, test_dataset=N
             if args.linkpred:
                 writer.add_scalar('loss/linkpred_loss', model.link_loss, epoch)
         print('Avg loss: ', avg_loss, '; epoch time: ', total_time)
+        epochs.append(epoch)
+        train_loss.append(avg_loss.item())
         result = evaluate(dataset, model, args, name='Train', max_num_examples=100)
         train_accs.append(result['acc'])
         train_epochs.append(epoch)
         if val_dataset is not None:
             val_result = evaluate(val_dataset, model, args, name='Validation')
             val_accs.append(val_result['acc'])
+            val_loss.append(val_result['loss'].item())
         if val_result['acc'] > best_val_result['acc'] - 1e-7:
             best_val_result['acc'] = val_result['acc']
             best_val_result['epoch'] = epoch
             best_val_result['loss'] = avg_loss
         if test_dataset is not None:
             test_result = evaluate(test_dataset, model, args, name='Test')
+            test_loss.append(test_result['loss'].item())
             test_result['epoch'] = epoch
         if writer is not None:
             writer.add_scalar('acc/train_acc', result['acc'], epoch)
@@ -262,13 +290,14 @@ def train(dataset, model, args, same_feat=True, val_dataset=None, test_dataset=N
     matplotlib.style.use('seaborn')
     plt.switch_backend('agg')
     plt.figure()
-    plt.plot(train_epochs, util.exp_moving_avg(train_accs, 0.85), '-', lw=1)
+    # plt.plot(train_epochs, util.exp_moving_avg(train_accs, 0.85), '-', lw=1)
     if test_dataset is not None:
-        plt.plot(best_val_epochs, best_val_accs, 'bo', test_epochs, test_accs, 'go')
-        plt.legend(['train', 'val', 'test'])
+        # plt.plot(best_val_epochs, best_val_accs, 'b.', test_epochs, test_accs, 'g.', epochs, losses, 'r.')
+        plt.plot(epochs, train_loss, 'r.', epochs, test_loss, 'g.', epochs, val_loss, 'b.')
+        plt.legend(['train_loss', 'test_loss', 'val_loss'])
     else:
-        plt.plot(best_val_epochs, best_val_accs, 'bo')
-        plt.legend(['train', 'val'])
+        plt.plot(best_val_epochs, best_val_accs, 'b.', epochs, train_loss, 'r.')
+        plt.legend(['train', 'val', 'loss'])
     plt.savefig(gen_train_plt_name(args), dpi=600)
     plt.close()
     matplotlib.style.use('default')
@@ -431,7 +460,7 @@ def pkl_task(args, feat=None):
     train(train_dataset, model, args, test_dataset=test_dataset)
     evaluate(test_dataset, model, args, 'Validation')
 
-def benchmark_task(args, writer=None, feat='node-label'):
+def benchmark_task(args, writer=None, feat='node-feat'):
     graphs = load_data.read_graphfile(args.datadir, args.bmname, max_nodes=args.max_nodes)
     
     if feat == 'node-feat' and 'feat_dim' in graphs[0].graph:
@@ -606,7 +635,7 @@ def arg_parse():
                         lr=0.001,
                         clip=2.0,
                         batch_size=20,
-                        num_epochs=100,
+                        num_epochs=300,
                         train_ratio=0.8,
                         test_ratio=0.1,
                         num_workers=1,
@@ -638,7 +667,8 @@ def main():
     print('CUDA', prog_args.cuda)
 
     if prog_args.bmname is not None:
-        benchmark_task_val(prog_args, writer=writer)
+        # benchmark_task_val(prog_args, writer=writer)
+        benchmark_task(prog_args, writer=writer)
     elif prog_args.pkl_fname is not None:
         pkl_task(prog_args)
     elif prog_args.dataset is not None:
@@ -652,3 +682,8 @@ def main():
 if __name__ == "__main__":
     main()
 
+# graphs = load_data.read_graphfile("data", "ENZYMES", max_nodes=1000)
+# graphs = load_data.read_graphfile("data", "SEC", max_nodes=1000)
+# for i in graphs:
+#     nx.draw(i, with_labels=True)
+#     plt.show()
