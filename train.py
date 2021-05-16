@@ -307,6 +307,7 @@ def train(dataset, model, args, same_feat=True, val_dataset=None, test_dataset=N
 def prepare_data(graphs, args, test_graphs=None, max_nodes=0):
 
     random.shuffle(graphs)
+    print("prepare data: ", test_graphs)
     if test_graphs is None:
         train_idx = int(len(graphs) * args.train_ratio)
         test_idx = int(len(graphs) * (1-args.test_ratio))
@@ -316,7 +317,9 @@ def prepare_data(graphs, args, test_graphs=None, max_nodes=0):
     else:
         train_idx = int(len(graphs) * args.train_ratio)
         train_graphs = graphs[:train_idx]
-        val_graphs = graph[train_idx:]
+        test_idx = int(len(graphs) * (1 - args.test_ratio))
+        val_graphs = graphs[train_idx: test_idx]
+        # val_graphs = graphs[train_idx:]
     print('Num training graphs: ', len(train_graphs), 
           '; Num validation graphs: ', len(val_graphs),
           '; Num testing graphs: ', len(test_graphs))
@@ -462,6 +465,10 @@ def pkl_task(args, feat=None):
 
 def benchmark_task(args, writer=None, feat='node-feat'):
     graphs = load_data.read_graphfile(args.datadir, args.bmname, max_nodes=args.max_nodes)
+    test_graphs = load_data.read_graphfile(args.datadir, 'SEC_new', max_nodes=args.max_nodes)
+    test_idx = int(len(test_graphs) * (1 - args.test_ratio))
+    print("test_idx: ", test_idx)
+    test_graphs = graphs[test_idx:]
     
     if feat == 'node-feat' and 'feat_dim' in graphs[0].graph:
         print('Using node features')
@@ -478,7 +485,7 @@ def benchmark_task(args, writer=None, feat='node-feat'):
             featgen_const.gen_node_features(G)
 
     train_dataset, val_dataset, test_dataset, max_num_nodes, input_dim, assign_input_dim = \
-            prepare_data(graphs, args, max_nodes=args.max_nodes)
+            prepare_data(graphs, args, test_graphs=test_graphs, max_nodes=args.max_nodes)
     if args.method == 'soft-assign':
         print('Method: soft-assign')
         model = encoders.SoftPoolingGcnEncoder(
@@ -683,7 +690,7 @@ if __name__ == "__main__":
     main()
 
 # graphs = load_data.read_graphfile("data", "ENZYMES", max_nodes=1000)
-# graphs = load_data.read_graphfile("data", "SEC", max_nodes=1000)
+# graphs = load_data.read_graphfile("data", "SEC_new", max_nodes=1000)
 # for i in graphs:
 #     nx.draw(i, with_labels=True)
 #     plt.show()
