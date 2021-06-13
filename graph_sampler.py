@@ -103,7 +103,6 @@ class GraphSampler(torch.utils.data.Dataset):
         adj_padded[:num_nodes, :num_nodes] = adj
 
         # use all nodes for aggregation (baseline)
-
         return {'adj':adj_padded,
                 'feats':self.feature_all[idx].copy(),
                 'label':self.label_all[idx],

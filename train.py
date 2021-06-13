@@ -27,25 +27,17 @@ import gen.data as datagen
 from graph_sampler import GraphSampler
 import load_data
 import util
+import torch.nn.functional as F
 
 
-def evaluate(dataset, model, args, name='Validation', max_num_examples=None):
 
-    # calculate categorical cross entropy
-    def cross_entropy(actual, predicted):
-        sum_score = 0.0
-        for i in range(len(actual)):
-            for j in range(len(actual[i])):
-                sum_score += actual[i][j] * log(1e-15 + predicted[i][j])
-        mean_sum_score = 1.0 / len(actual) * sum_score
-        return -mean_sum_score
-
+def evaluate(dataset, model, args, name='Validation', max_num_examples=None, epoch=None):
     model.eval()
 
     labels = []
     preds = []
     avg_loss = 0.0
-    optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=0.001)
+
     for batch_idx, data in enumerate(dataset):
         adj = Variable(data['adj'].float(), requires_grad=False).cuda()
         h0 = Variable(data['feats'].float()).cuda()
@@ -56,15 +48,25 @@ def evaluate(dataset, model, args, name='Validation', max_num_examples=None):
         ypred = model(h0, adj, batch_num_nodes, assign_x=assign_input)
         _, indices = torch.max(ypred, 1)
         preds.append(indices.cpu().data.numpy())
+
+        # label = Variable(data['label'].long()).cuda()
+        # loss = model.loss(ypred, label)
+        # loss.backward()
+        # nn.utils.clip_grad_norm_(model.parameters(), args.clip)
+        # optimizer.step()
+        # avg_loss += loss
+
         label = Variable(data['label'].long()).cuda()
-        loss = model.loss(ypred, label)
-        loss.backward()
-        nn.utils.clip_grad_norm_(model.parameters(), args.clip)
-        optimizer.step()
+        loss = F.cross_entropy(ypred, label, reduction='mean')
+        print("{} loss in eval: {}".format(name, loss))
         avg_loss += loss
+
         if max_num_examples is not None:
             if (batch_idx+1)*args.batch_size > max_num_examples:
                 break
+
+    print("total loss:", avg_loss)
+    print("batch_idx+1: ", batch_idx + 1)
 
     avg_loss /= batch_idx + 1
     labels = np.hstack(labels)
@@ -76,6 +78,8 @@ def evaluate(dataset, model, args, name='Validation', max_num_examples=None):
               'F1': metrics.f1_score(labels, preds, average="micro"),
               'loss': avg_loss}
     print(name, " accuracy:", result['acc'])
+    print(name, " labels: ", labels)
+    print(name, " preds: ", preds)
     return result
 
 def gen_prefix(args):
@@ -211,6 +215,7 @@ def train(dataset, model, args, same_feat=True, val_dataset=None, test_dataset=N
     test_accs = []
     test_epochs = []
     val_accs = []
+    val_epochs = []
     epochs = []
     train_loss = []
     test_loss = []
@@ -238,6 +243,7 @@ def train(dataset, model, args, same_feat=True, val_dataset=None, test_dataset=N
             nn.utils.clip_grad_norm_(model.parameters(), args.clip)
             optimizer.step()
             iter += 1
+            print("Train loss: {}".format(loss))
             avg_loss += loss
             #if iter % 20 == 0:
             #    print('Iter: ', iter, ', loss: ', loss.data[0])
@@ -249,6 +255,8 @@ def train(dataset, model, args, same_feat=True, val_dataset=None, test_dataset=N
                 log_assignment(model.assign_tensor, writer, epoch, writer_batch_idx)
                 if args.log_graph:
                     log_graph(adj, batch_num_nodes, writer, epoch, writer_batch_idx, model.assign_tensor)
+        print("total train loss: {}".format(avg_loss))
+        print("batch_idx+1: ", batch_idx+1)
         avg_loss /= batch_idx + 1
         if writer is not None:
             writer.add_scalar('loss/avg_loss', avg_loss, epoch)
@@ -257,19 +265,20 @@ def train(dataset, model, args, same_feat=True, val_dataset=None, test_dataset=N
         print('Avg loss: ', avg_loss, '; epoch time: ', total_time)
         epochs.append(epoch)
         train_loss.append(avg_loss.item())
-        result = evaluate(dataset, model, args, name='Train', max_num_examples=100)
+        result = evaluate(dataset, model, args, name='Train', max_num_examples=100, epoch=epoch)
         train_accs.append(result['acc'])
         train_epochs.append(epoch)
         if val_dataset is not None:
-            val_result = evaluate(val_dataset, model, args, name='Validation')
+            val_result = evaluate(val_dataset, model, args, name='Validation', epoch=epoch)
             val_accs.append(val_result['acc'])
             val_loss.append(val_result['loss'].item())
+            val_epochs.append(epoch)
         if val_result['acc'] > best_val_result['acc'] - 1e-7:
             best_val_result['acc'] = val_result['acc']
             best_val_result['epoch'] = epoch
             best_val_result['loss'] = avg_loss
         if test_dataset is not None:
-            test_result = evaluate(test_dataset, model, args, name='Test')
+            test_result = evaluate(test_dataset, model, args, name='Test', epoch=epoch)
             test_loss.append(test_result['loss'].item())
             test_result['epoch'] = epoch
         if writer is not None:
@@ -286,28 +295,42 @@ def train(dataset, model, args, same_feat=True, val_dataset=None, test_dataset=N
             print('Test result: ', test_result)
             test_epochs.append(test_result['epoch'])
             test_accs.append(test_result['acc'])
-
+    # plot accuracy curves
     matplotlib.style.use('seaborn')
     plt.switch_backend('agg')
     plt.figure()
-    # plt.plot(train_epochs, util.exp_moving_avg(train_accs, 0.85), '-', lw=1)
+    plt.plot(train_epochs, util.exp_moving_avg(train_accs, 0.85), '-',color='red', lw=1)
     if test_dataset is not None:
-        # plt.plot(best_val_epochs, best_val_accs, 'b.', test_epochs, test_accs, 'g.', epochs, losses, 'r.')
-        plt.plot(epochs, train_loss, 'r.', epochs, test_loss, 'g.', epochs, val_loss, 'b.')
-        plt.legend(['train_loss', 'test_loss', 'val_loss'])
+        plt.plot(val_epochs, util.exp_moving_avg(val_accs, 0.85), '-', color='blue', lw=1)
+        plt.plot(test_epochs, util.exp_moving_avg(test_accs, 0.85), '-', color='green', lw=1)
+        plt.plot(val_epochs,val_accs, '.', color='blue')
+        plt.plot(test_epochs, test_accs, '.', color='green')
+        plt.legend(['train_acc', 'val_acc', 'test_acc'])
     else:
         plt.plot(best_val_epochs, best_val_accs, 'b.', epochs, train_loss, 'r.')
         plt.legend(['train', 'val', 'loss'])
     plt.savefig(gen_train_plt_name(args), dpi=600)
     plt.close()
-    matplotlib.style.use('default')
 
+    # plot loss curves
+    matplotlib.style.use('seaborn')
+    plt.switch_backend('agg')
+    plt.figure()
+    plt.plot(train_epochs, util.exp_moving_avg(train_loss, 0.85), '-', color='red', lw=1)
+    if test_dataset is not None:
+        plt.plot(val_epochs, util.exp_moving_avg(val_loss, 0.85), '-', color='blue', lw=1)
+        plt.plot(test_epochs, util.exp_moving_avg(test_loss, 0.85), '-', color='green', lw=1)
+        plt.plot(val_epochs, val_loss, '.', color='blue', lw=1)
+        plt.plot(test_epochs,test_loss, '.', color='green', lw=1)
+        plt.legend(['train_loss', 'val_loss', 'test_loss'])
+    plt.savefig('results/loss', dpi=600)
+    plt.close()
     return model, val_accs
 
 def prepare_data(graphs, args, test_graphs=None, max_nodes=0):
 
     random.shuffle(graphs)
-    print("prepare data: ", test_graphs)
+
     if test_graphs is None:
         train_idx = int(len(graphs) * args.train_ratio)
         test_idx = int(len(graphs) * (1-args.test_ratio))
@@ -345,7 +368,7 @@ def prepare_data(graphs, args, test_graphs=None, max_nodes=0):
     val_dataset_loader = torch.utils.data.DataLoader(
             dataset_sampler, 
             batch_size=args.batch_size, 
-            shuffle=False,
+            shuffle=True,
             num_workers=args.num_workers)
 
     dataset_sampler = GraphSampler(test_graphs, normalize=False, max_num_nodes=max_nodes,
@@ -355,6 +378,26 @@ def prepare_data(graphs, args, test_graphs=None, max_nodes=0):
             batch_size=args.batch_size, 
             shuffle=False,
             num_workers=args.num_workers)
+    train_low, train_med, train_high = 0, 0, 0
+    val_low, val_med, val_high =  0, 0, 0
+    test_low, test_med, test_high =  0, 0, 0
+    for data in train_dataset_loader:
+        train_low += (data['label'] == 0).sum()
+        train_med += (data['label'] == 1).sum()
+        train_high += (data['label'] == 2).sum()
+    print('train data count: low {}, medium {}, high {} '.format(train_low, train_med, train_high))
+
+    for data in val_dataset_loader:
+        val_low += (data['label'] == 0).sum()
+        val_med += (data['label'] == 1).sum()
+        val_high += (data['label'] == 2).sum()
+    print('validation data count: low {}, medium {}, high {} '.format(val_low, val_med, val_high))
+
+    for data in test_dataset_loader:
+        test_low += (data['label'] == 0).sum()
+        test_med += (data['label'] == 1).sum()
+        test_high += (data['label'] == 2).sum()
+    print('test data count: low {}, medium {}, high {} '.format(test_low, test_med, test_high))
 
     return train_dataset_loader, val_dataset_loader, test_dataset_loader, \
             dataset_sampler.max_num_nodes, dataset_sampler.feat_dim, dataset_sampler.assign_feat_dim
@@ -379,6 +422,7 @@ def syn_community1v2(args, writer=None, export_graphs=False):
     graphs = graphs1 + graphs2
     
     train_dataset, val_dataset, test_dataset, max_num_nodes, input_dim, assign_input_dim = prepare_data(graphs, args)
+    # print("train_dataset:", train_dataset)
     if args.method == 'soft-assign':
         print('Method: soft-assign')
         model = encoders.SoftPoolingGcnEncoder(
@@ -465,11 +509,11 @@ def pkl_task(args, feat=None):
 
 def benchmark_task(args, writer=None, feat='node-feat'):
     graphs = load_data.read_graphfile(args.datadir, args.bmname, max_nodes=args.max_nodes)
-    test_graphs = load_data.read_graphfile(args.datadir, 'SEC_new', max_nodes=args.max_nodes)
-    test_idx = int(len(test_graphs) * (1 - args.test_ratio))
-    print("test_idx: ", test_idx)
-    test_graphs = graphs[test_idx:]
-    
+    graphs += load_data.read_graphfile(args.datadir, 'SEC_latest', max_nodes=args.max_nodes)
+    # test_graphs = load_data.read_graphfile(args.datadir, 'SEC_new', max_nodes=args.max_nodes)
+    # test_idx = int(len(test_graphs) * (1 - args.test_ratio))
+    # print("test_idx: ", test_idx)
+    # test_graphs = graphs[test_idx:]
     if feat == 'node-feat' and 'feat_dim' in graphs[0].graph:
         print('Using node features')
         input_dim = graphs[0].graph['feat_dim']
@@ -485,7 +529,7 @@ def benchmark_task(args, writer=None, feat='node-feat'):
             featgen_const.gen_node_features(G)
 
     train_dataset, val_dataset, test_dataset, max_num_nodes, input_dim, assign_input_dim = \
-            prepare_data(graphs, args, test_graphs=test_graphs, max_nodes=args.max_nodes)
+            prepare_data(graphs, args, max_nodes=args.max_nodes)
     if args.method == 'soft-assign':
         print('Method: soft-assign')
         model = encoders.SoftPoolingGcnEncoder(
@@ -636,12 +680,12 @@ def arg_parse():
                         datadir='data',
                         logdir='log',
                         dataset='syn1v2',
-                        max_nodes=1000,
-                        cuda='1',
+                        max_nodes=200,
+                        cuda='0',
                         feature_type='default',
                         lr=0.001,
                         clip=2.0,
-                        batch_size=20,
+                        batch_size=64,
                         num_epochs=300,
                         train_ratio=0.8,
                         test_ratio=0.1,
@@ -651,7 +695,7 @@ def arg_parse():
                         output_dim=30,
                         num_classes=3,
                         num_gc_layers=3,
-                        dropout=0.0,
+                        dropout=0.5,
                         method='soft-assign',
                         name_suffix='',
                         assign_ratio=0.1,
@@ -661,7 +705,7 @@ def arg_parse():
 
 def main():
     prog_args = arg_parse()
-
+    print('parameters', prog_args)
     # export scalar data to JSON for external processing
     path = os.path.join(prog_args.logdir, gen_prefix(prog_args))
     if os.path.isdir(path):
@@ -669,8 +713,8 @@ def main():
         shutil.rmtree(path)
     writer = SummaryWriter(path)
     #writer = None
-    # os.environ['CUDA_VISIBLE_DEVICES'] = prog_args.cuda
-    os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
+    os.environ['CUDA_VISIBLE_DEVICES'] = prog_args.cuda
+    # os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
     print('CUDA', prog_args.cuda)
 
     if prog_args.bmname is not None:
