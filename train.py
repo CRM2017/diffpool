@@ -58,15 +58,11 @@ def evaluate(dataset, model, args, name='Validation', max_num_examples=None, epo
 
         label = Variable(data['label'].long()).cuda()
         loss = F.cross_entropy(ypred, label, reduction='mean')
-        print("{} loss in eval: {}".format(name, loss))
         avg_loss += loss
 
         if max_num_examples is not None:
             if (batch_idx+1)*args.batch_size > max_num_examples:
                 break
-
-    print("total loss:", avg_loss)
-    print("batch_idx+1: ", batch_idx + 1)
 
     avg_loss /= batch_idx + 1
     labels = np.hstack(labels)
@@ -77,9 +73,10 @@ def evaluate(dataset, model, args, name='Validation', max_num_examples=None, epo
               'acc': metrics.accuracy_score(labels, preds),
               'F1': metrics.f1_score(labels, preds, average="micro"),
               'loss': avg_loss}
-    print(name, " accuracy:", result['acc'])
-    print(name, " labels: ", labels)
-    print(name, " preds: ", preds)
+    # Print train validation and test predicted labels and accuracy
+    # print(name, " accuracy:", result['acc'])
+    # print(name, " labels: ", labels)
+    # print(name, " preds: ", preds)
     return result
 
 def gen_prefix(args):
@@ -243,7 +240,6 @@ def train(dataset, model, args, same_feat=True, val_dataset=None, test_dataset=N
             nn.utils.clip_grad_norm_(model.parameters(), args.clip)
             optimizer.step()
             iter += 1
-            print("Train loss: {}".format(loss))
             avg_loss += loss
             #if iter % 20 == 0:
             #    print('Iter: ', iter, ', loss: ', loss.data[0])
@@ -255,8 +251,6 @@ def train(dataset, model, args, same_feat=True, val_dataset=None, test_dataset=N
                 log_assignment(model.assign_tensor, writer, epoch, writer_batch_idx)
                 if args.log_graph:
                     log_graph(adj, batch_num_nodes, writer, epoch, writer_batch_idx, model.assign_tensor)
-        print("total train loss: {}".format(avg_loss))
-        print("batch_idx+1: ", batch_idx+1)
         avg_loss /= batch_idx + 1
         if writer is not None:
             writer.add_scalar('loss/avg_loss', avg_loss, epoch)
@@ -320,8 +314,8 @@ def train(dataset, model, args, same_feat=True, val_dataset=None, test_dataset=N
     if test_dataset is not None:
         plt.plot(val_epochs, util.exp_moving_avg(val_loss, 0.85), '-', color='blue', lw=1)
         plt.plot(test_epochs, util.exp_moving_avg(test_loss, 0.85), '-', color='green', lw=1)
-        plt.plot(val_epochs, val_loss, '.', color='blue', lw=1)
-        plt.plot(test_epochs,test_loss, '.', color='green', lw=1)
+        # plt.plot(val_epochs, val_loss, '.', color='blue', lw=1)
+        # plt.plot(test_epochs,test_loss, '.', color='green', lw=1)
         plt.legend(['train_loss', 'val_loss', 'test_loss'])
     plt.savefig('results/loss', dpi=600)
     plt.close()
@@ -509,7 +503,7 @@ def pkl_task(args, feat=None):
 
 def benchmark_task(args, writer=None, feat='node-feat'):
     graphs = load_data.read_graphfile(args.datadir, args.bmname, max_nodes=args.max_nodes)
-    graphs += load_data.read_graphfile(args.datadir, 'SEC_latest', max_nodes=args.max_nodes)
+    # graphs += load_data.read_graphfile(args.datadir, 'SEC_latest', max_nodes=args.max_nodes)
     # test_graphs = load_data.read_graphfile(args.datadir, 'SEC_new', max_nodes=args.max_nodes)
     # test_idx = int(len(test_graphs) * (1 - args.test_ratio))
     # print("test_idx: ", test_idx)
@@ -685,17 +679,17 @@ def arg_parse():
                         feature_type='default',
                         lr=0.001,
                         clip=2.0,
-                        batch_size=64,
-                        num_epochs=300,
+                        batch_size=20,
+                        num_epochs=200  ,
                         train_ratio=0.8,
                         test_ratio=0.1,
                         num_workers=1,
                         input_dim=10,
                         hidden_dim=30,
                         output_dim=30,
-                        num_classes=3,
+                        num_classes=2,
                         num_gc_layers=3,
-                        dropout=0.5,
+                        dropout=0.0,
                         method='soft-assign',
                         name_suffix='',
                         assign_ratio=0.1,
@@ -732,9 +726,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-# graphs = load_data.read_graphfile("data", "ENZYMES", max_nodes=1000)
-# graphs = load_data.read_graphfile("data", "SEC_new", max_nodes=1000)
-# for i in graphs:
-#     nx.draw(i, with_labels=True)
-#     plt.show()
